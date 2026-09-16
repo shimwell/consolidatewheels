@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 from unittest import mock
 
 import pytest
@@ -36,6 +37,82 @@ def test_buildlibmap(tmpdir):
     with pytest.raises(ValueError) as err:
         consolidate_linux.buildlibmap([wheeldir, duplicatewheeldir])
     assert re.search(r"Library lib.+\.so appears multiple times: ", str(err.value))
+
+
+def test_buildlibmap_versioned_library(tmpdir):
+    wheeldir = tmpdir.mkdir("wheel")
+    libsdir = wheeldir.mkdir("package.libs")
+    libsdir.join("libfoo-3fac4b7b.so.1.2.3").write("")
+
+    mapping = consolidate_linux.buildlibmap([str(wheeldir)])
+
+    assert mapping == {
+        "libfoo.so.1.2.3": "libfoo-3fac4b7b.so.1.2.3",
+    }
+
+
+def test_buildlibmap_distinct_versions(tmp_path):
+    libsdir = tmp_path / "package.libs"
+    libsdir.mkdir()
+    for name in ("libfoo-aaaaaaaa.so.0.12", "libfoo-bbbbbbbb.so.0.13"):
+        (libsdir / name).touch()
+
+    assert consolidate_linux.buildlibmap([str(tmp_path)]) == {
+        "libfoo.so.0.12": "libfoo-aaaaaaaa.so.0.12",
+        "libfoo.so.0.13": "libfoo-bbbbbbbb.so.0.13",
+    }
+
+
+def test_buildlibmap_duplicate_version(tmp_path):
+    libsdir = tmp_path / "package.libs"
+    libsdir.mkdir()
+    for name in ("libfoo-aaaaaaaa.so.1.2", "libfoo-bbbbbbbb.so.1.2"):
+        (libsdir / name).touch()
+
+    with pytest.raises(ValueError, match=r"Library libfoo\.so\.1\.2 appears"):
+        consolidate_linux.buildlibmap([str(tmp_path)])
+
+
+@pytest.mark.parametrize(
+    ("libfilename", "expected"),
+    [
+        ("libfoo-3fac4b7b.so", "libfoo.so"),
+        ("libfoo-3fac4b7b.so.1.2.3", "libfoo.so.1.2.3"),
+        ("libfoo.solver-deadbeef.so.1", "libfoo.solver.so.1"),
+        ("libfoo.so.helper-deadbeef.so.1", "libfoo.so.helper.so.1"),
+        ("libfoo.so.1.2.3", "libfoo.so.1.2.3"),
+        ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.so"),
+    ],
+)
+def test_demangle_libname(libfilename, expected):
+    assert consolidate_linux.demangle_libname(libfilename) == expected
+
+
+@pytest.mark.parametrize("name", ["libfoo.so.1-gdb.py", "libfoo.so.debug", "libfoo"])
+def test_demangle_invalid_libname(name):
+    with pytest.raises(ValueError, match="Not a shared library filename"):
+        consolidate_linux.demangle_libname(name)
+
+
+def test_shared_object_discovery(tmp_path):
+    names = ["module.cpython-310-x86_64-linux-gnu.so", "libfoo.so.1.2.3"]
+    for name in names + ["libfoo.so.1-gdb.py", "libfoo.so.1.debug", "libfoo.source"]:
+        (tmp_path / name).touch()
+    (tmp_path / "directory.so.1").mkdir()
+
+    assert {
+        path.name for path in consolidate_linux._find_shared_objects(str(tmp_path))
+    } == set(names)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Symlinks require privileges")
+def test_shared_object_symlinks(tmp_path):
+    library = tmp_path / "libfoo-deadbeef.so.1.2"
+    library.touch()
+    (tmp_path / "libfoo-deadbeef.so.1").symlink_to(library.name)
+    (tmp_path / "missing.so.1").symlink_to("missing.so.1.2")
+
+    assert list(consolidate_linux._find_shared_objects(str(tmp_path))) == [library]
 
 
 def test_patch_wheeldirs(tmpdir):
@@ -106,6 +183,28 @@ def test_patch_wheeldirs(tmpdir):
     assert re.compile(
         r"Unable to apply mangling to .+, libbar.so->libbar-3fac4b7b.so"
     ).match(str(err.value))
+
+
+def test_patch_wheeldirs_versioned_library(tmpdir):
+    wheeldir = tmpdir.mkdir("wheel")
+    versioned_lib = wheeldir.join("libfoo.so.1.2.3")
+    versioned_lib.write("")
+
+    with mock.patch("subprocess.call", return_value=0) as mock_call:
+        consolidate_linux.patch_wheeldirs(
+            [str(wheeldir)],
+            mangling_map={"libfoo.so.1.2.3": "libfoo-3fac4b7b.so.1.2.3"},
+        )
+
+    mock_call.assert_called_once_with(
+        [
+            "patchelf",
+            "--replace-needed",
+            "libfoo.so.1.2.3",
+            "libfoo-3fac4b7b.so.1.2.3",
+            str(versioned_lib),
+        ]
+    )
 
 
 def test_consolidate(tmpdir):

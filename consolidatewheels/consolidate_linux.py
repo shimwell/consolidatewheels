@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
+from typing import Iterator, Match, Optional
 
 from .wheelsfunc import packwheels, unpackwheels
 
@@ -31,7 +33,7 @@ def patch_wheeldirs(wheeldirs: list[str], mangling_map: dict[str, str]):
     """Provided a mapping of mangled library names, apply the manglign to all wheels.
 
     This traverses the content of all provided wheel directories
-    looking for .so files. For every file, will patch the file dependencies
+    looking for shared object files. For every file, will patch the file dependencies
     so that they look for the mangled version of the library instead of
     the unmangled one.
 
@@ -40,7 +42,7 @@ def patch_wheeldirs(wheeldirs: list[str], mangling_map: dict[str, str]):
     ignoring missing entries as we just invoke patchelf on everything.
     """
     for wheeldir in wheeldirs:
-        for lib_to_patch_path in pathlib.Path(wheeldir).rglob("*.so"):
+        for lib_to_patch_path in _find_shared_objects(wheeldir):
             lib_to_patch = str(lib_to_patch_path)
             print(f"Patching {lib_to_patch}")
             for lib_to_mangle, lib_mangled_name in mangling_map.items():
@@ -85,7 +87,9 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
     seen_shared_objects = {}  # type: dict[str, str]
     all_shared_objects = {}  # type: dict[str, str]
     for wheeldir in wheeldirs:
-        for libpath in pathlib.Path(wheeldir).rglob("*.libs/*.so"):
+        for libpath in _find_shared_objects(wheeldir):
+            if not libpath.parent.name.endswith(".libs"):
+                continue
             demangled_lib = demangle_libname(libpath.name)
             if demangled_lib in all_shared_objects:
                 seen_shared_object = seen_shared_objects[demangled_lib]
@@ -99,7 +103,25 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
     return all_shared_objects
 
 
-def demangle_libname(libfilename):
-    mangled_libname, extension = os.path.splitext(libfilename)
+def _find_shared_objects(wheeldir: str) -> Iterator[pathlib.Path]:
+    """Find .so files and numeric versions, excluding symlink aliases."""
+    return (
+        path
+        for path in pathlib.Path(wheeldir).rglob("*.so*")
+        if _shared_object_suffix(path.name) and not path.is_symlink() and path.is_file()
+    )
+
+
+def _shared_object_suffix(libfilename: str) -> Optional[Match[str]]:
+    """Find a terminal .so suffix with an optional numeric version."""
+    return re.search(r"\.so(?:\.[0-9]+)*$", libfilename)
+
+
+def demangle_libname(libfilename: str) -> str:
+    """Remove an auditwheel hash while preserving a shared library version."""
+    suffix = _shared_object_suffix(libfilename)
+    if suffix is None:
+        raise ValueError(f"Not a shared library filename: {libfilename}")
+    mangled_libname = libfilename[: suffix.start()]
     demangled_libname = mangled_libname.rsplit("-", 1)[0]
-    return f"{demangled_libname}{extension}"
+    return f"{demangled_libname}{suffix.group()}"
