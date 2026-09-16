@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
 import sys
 from unittest import mock
 
@@ -205,6 +206,87 @@ def test_patch_wheeldirs_versioned_library(tmpdir):
             str(versioned_lib),
         ]
     )
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Requires Linux ELF tools")
+@pytest.mark.parametrize("soname", ["libfoo.so.1.2.3", "libfoo.so.1"])
+def test_versioned_elf_dependencies(tmp_path, soname):
+    compiler = shutil.which("cc")
+    if not compiler or not shutil.which("patchelf"):
+        pytest.skip("Requires cc and patchelf")
+
+    libsdir = tmp_path / "provider.libs"
+    libsdir.mkdir()
+    provider = libsdir / "libfoo-deadbeef.so.1.2.3"
+    consumer = tmp_path / "consumer.so.2.0"
+    subprocess.run(
+        [
+            compiler,
+            "-shared",
+            "-fPIC",
+            "-x",
+            "c",
+            "-",
+            "-Wl,-soname," + soname,
+            "-o",
+            str(provider),
+        ],
+        input="int foo(void) { return 42; }",
+        text=True,
+        check=True,
+    )
+    subprocess.run(
+        [
+            compiler,
+            "-shared",
+            "-fPIC",
+            "-x",
+            "c",
+            "-",
+            "-x",
+            "none",
+            str(provider),
+            "-o",
+            str(consumer),
+        ],
+        input="extern int foo(void); int use_foo(void) { return foo(); }",
+        text=True,
+        check=True,
+    )
+    # Reproduce auditwheel changing the provider SONAME, not the consumer.
+    subprocess.run(
+        ["patchelf", "--set-soname", provider.name, str(provider)], check=True
+    )
+    assert (
+        soname
+        in subprocess.check_output(
+            ["patchelf", "--print-needed", str(consumer)], text=True
+        ).splitlines()
+    )
+
+    mapping = consolidate_linux.buildlibmap([str(tmp_path)])
+    consolidate_linux.patch_wheeldirs([str(tmp_path)], mapping)
+    needed = subprocess.check_output(
+        ["patchelf", "--print-needed", str(consumer)], text=True
+    ).splitlines()
+    if soname == "libfoo.so.1.2.3":
+        assert provider.name in needed
+        assert soname not in needed
+        # Verify the rewritten dependency can load and execute, not just be inspected.
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import ctypes, sys; ctypes.CDLL(sys.argv[1]); "
+                "assert ctypes.CDLL(sys.argv[2]).use_foo() == 42",
+                str(provider),
+                str(consumer),
+            ],
+            check=True,
+        )
+    else:
+        assert soname in needed
+        assert provider.name not in needed
 
 
 def test_consolidate(tmpdir):

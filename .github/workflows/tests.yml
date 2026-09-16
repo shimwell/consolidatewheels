@@ -34,6 +34,9 @@ jobs:
       - name: Install Test dependencies
         run: |
           pip install -U --upgrade-strategy=eager --pre -e '.[testing]'
+      - name: Install Linux ELF test tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc patchelf
       - name: Run tests
         run: |
           pytest -v
