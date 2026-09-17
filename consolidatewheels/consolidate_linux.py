@@ -83,6 +83,11 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
     Report an error if the same directory has multiple possible mangling,
     this will usually signal that --exclude was forgotten for one or
     more libraries when invoking auditwheel.
+
+    Versioned libraries are mapped under their exact versioned name, so
+    libfoo.so.1.2.3 is not assumed to satisfy a dependency recorded as
+    libfoo.so.1. Recovering the shorter soname would mean reading it
+    from the library itself.
     """
     seen_shared_objects = {}  # type: dict[str, str]
     all_shared_objects = {}  # type: dict[str, str]

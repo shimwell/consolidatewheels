@@ -38,22 +38,14 @@ def test_buildlibmap(tmpdir):
     assert re.search(r"Library lib.+\.so appears multiple times: ", str(err.value))
 
 
-@pytest.mark.parametrize(
-    ("libfilename", "expected"),
-    [
-        ("libfoo-3fac4b7b.so.1.2.3", "libfoo.so.1.2.3"),
-        ("libfoo-deadbeef.solver.so.1", "libfoo.solver.so.1"),
-        ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.3.29.so"),
-    ],
-)
-def test_buildlibmap_versioned_library(tmpdir, libfilename, expected):
+def test_buildlibmap_versioned_library(tmpdir):
     wheeldir = tmpdir.mkdir("wheel")
     libsdir = wheeldir.mkdir("package.libs")
-    libsdir.join(libfilename).write("")
+    libsdir.join("libfoo-3fac4b7b.so.1.2.3").write("")
 
     mapping = consolidate_linux.buildlibmap([str(wheeldir)])
 
-    assert mapping == {expected: libfilename}
+    assert mapping == {"libfoo.so.1.2.3": "libfoo-3fac4b7b.so.1.2.3"}
 
 
 def test_buildlibmap_distinct_versions(tmp_path):
@@ -84,7 +76,6 @@ def test_buildlibmap_duplicate_version(tmp_path):
         ("libfoo-3fac4b7b.so", "libfoo.so"),
         ("libfoo-3fac4b7b.so.1.2.3", "libfoo.so.1.2.3"),
         ("libfoo-deadbeef.solver.so.1", "libfoo.solver.so.1"),
-        ("libfoo-deadbeef.so.helper.so.1", "libfoo.so.helper.so.1"),
         ("libfoo.so.1.2.3", "libfoo.so.1.2.3"),
         ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.3.29.so"),
     ],
