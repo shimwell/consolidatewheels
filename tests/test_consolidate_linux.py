@@ -70,6 +70,22 @@ def test_buildlibmap_duplicate_version(tmp_path):
         consolidate_linux.buildlibmap([str(tmp_path)])
 
 
+@pytest.mark.parametrize("libfilename", ["libfoo.so", "libfoo.so.1.2"])
+def test_buildlibmap_duplicate_unmangled_across_wheels(tmp_path, libfilename):
+    # Skipping unnecessary remapping must not hide duplicate providers.
+    for wheel in ("wheela", "wheelb"):
+        libsdir = tmp_path / wheel / "package.libs"
+        libsdir.mkdir(parents=True)
+        (libsdir / libfilename).touch()
+
+    wheeldirs = [str(tmp_path / "wheela"), str(tmp_path / "wheelb")]
+    with pytest.raises(
+        ValueError,
+        match=rf"Library {re.escape(libfilename)} appears multiple times:",
+    ):
+        consolidate_linux.buildlibmap(wheeldirs)
+
+
 def test_buildlibmap_double_mangled_library(tmp_path):
     # auditwheel can graft a library that carries a hash already, so a wheel
     # legitimately holds both names. Demangling the second one yields the
@@ -84,6 +100,25 @@ def test_buildlibmap_double_mangled_library(tmp_path):
         (libsdir / name).touch()
 
     assert consolidate_linux.buildlibmap([str(tmp_path)]) == {
+        "libgfortran.so.5.0.0": "libgfortran-040039e1.so.5.0.0",
+    }
+
+
+def test_buildlibmap_double_mangled_across_wheels(tmp_path):
+    # The two copies can also arrive in separate wheels, which is what
+    # happens when a package is built against another wheel's grafted
+    # library. The same mangling map is applied to every wheel, so the
+    # embedded name has to be recognised across all of them.
+    for wheel, name in (
+        ("wheela", "libgfortran-040039e1.so.5.0.0"),
+        ("wheelb", "libgfortran-040039e1-0352e75f.so.5.0.0"),
+    ):
+        libsdir = tmp_path / wheel / "package.libs"
+        libsdir.mkdir(parents=True)
+        (libsdir / name).touch()
+
+    wheeldirs = [str(tmp_path / "wheela"), str(tmp_path / "wheelb")]
+    assert consolidate_linux.buildlibmap(wheeldirs) == {
         "libgfortran.so.5.0.0": "libgfortran-040039e1.so.5.0.0",
     }
 
