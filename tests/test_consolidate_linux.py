@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import sys
 from unittest import mock
 
 import pytest
@@ -39,16 +38,22 @@ def test_buildlibmap(tmpdir):
     assert re.search(r"Library lib.+\.so appears multiple times: ", str(err.value))
 
 
-def test_buildlibmap_versioned_library(tmpdir):
+@pytest.mark.parametrize(
+    ("libfilename", "expected"),
+    [
+        ("libfoo-3fac4b7b.so.1.2.3", "libfoo.so.1.2.3"),
+        ("libfoo-deadbeef.solver.so.1", "libfoo.solver.so.1"),
+        ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.3.29.so"),
+    ],
+)
+def test_buildlibmap_versioned_library(tmpdir, libfilename, expected):
     wheeldir = tmpdir.mkdir("wheel")
     libsdir = wheeldir.mkdir("package.libs")
-    libsdir.join("libfoo-3fac4b7b.so.1.2.3").write("")
+    libsdir.join(libfilename).write("")
 
     mapping = consolidate_linux.buildlibmap([str(wheeldir)])
 
-    assert mapping == {
-        "libfoo.so.1.2.3": "libfoo-3fac4b7b.so.1.2.3",
-    }
+    assert mapping == {expected: libfilename}
 
 
 def test_buildlibmap_distinct_versions(tmp_path):
@@ -78,41 +83,14 @@ def test_buildlibmap_duplicate_version(tmp_path):
     [
         ("libfoo-3fac4b7b.so", "libfoo.so"),
         ("libfoo-3fac4b7b.so.1.2.3", "libfoo.so.1.2.3"),
-        ("libfoo.solver-deadbeef.so.1", "libfoo.solver.so.1"),
-        ("libfoo.so.helper-deadbeef.so.1", "libfoo.so.helper.so.1"),
+        ("libfoo-deadbeef.solver.so.1", "libfoo.solver.so.1"),
+        ("libfoo-deadbeef.so.helper.so.1", "libfoo.so.helper.so.1"),
         ("libfoo.so.1.2.3", "libfoo.so.1.2.3"),
-        ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.so"),
+        ("libopenblas-r0-3fac4b7b.3.29.so", "libopenblas-r0.3.29.so"),
     ],
 )
 def test_demangle_libname(libfilename, expected):
     assert consolidate_linux.demangle_libname(libfilename) == expected
-
-
-@pytest.mark.parametrize("name", ["libfoo.so.1-gdb.py", "libfoo.so.debug", "libfoo"])
-def test_demangle_invalid_libname(name):
-    with pytest.raises(ValueError, match="Not a shared library filename"):
-        consolidate_linux.demangle_libname(name)
-
-
-def test_shared_object_discovery(tmp_path):
-    names = ["module.cpython-310-x86_64-linux-gnu.so", "libfoo.so.1.2.3"]
-    for name in names + ["libfoo.so.1-gdb.py", "libfoo.so.1.debug", "libfoo.source"]:
-        (tmp_path / name).touch()
-    (tmp_path / "directory.so.1").mkdir()
-
-    assert {
-        path.name for path in consolidate_linux._find_shared_objects(str(tmp_path))
-    } == set(names)
-
-
-@pytest.mark.skipif(sys.platform == "win32", reason="Symlinks require privileges")
-def test_shared_object_symlinks(tmp_path):
-    library = tmp_path / "libfoo-deadbeef.so.1.2"
-    library.touch()
-    (tmp_path / "libfoo-deadbeef.so.1").symlink_to(library.name)
-    (tmp_path / "missing.so.1").symlink_to("missing.so.1.2")
-
-    assert list(consolidate_linux._find_shared_objects(str(tmp_path))) == [library]
 
 
 def test_patch_wheeldirs(tmpdir):

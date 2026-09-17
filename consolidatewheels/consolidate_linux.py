@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import os
 import pathlib
-import re
 import subprocess
 import tempfile
-from typing import Iterator, Match, Optional
+from typing import Iterator
 
 from .wheelsfunc import packwheels, unpackwheels
 
@@ -104,24 +104,14 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
 
 
 def _find_shared_objects(wheeldir: str) -> Iterator[pathlib.Path]:
-    """Find .so files and numeric versions, excluding symlink aliases."""
-    return (
-        path
-        for path in pathlib.Path(wheeldir).rglob("*.so*")
-        if _shared_object_suffix(path.name) and not path.is_symlink() and path.is_file()
+    """Find unversioned and versioned shared libraries in an unpacked wheel."""
+    return itertools.chain(
+        pathlib.Path(wheeldir).rglob("*.so"),
+        pathlib.Path(wheeldir).rglob("*.so.[0-9]*"),
     )
 
 
-def _shared_object_suffix(libfilename: str) -> Optional[Match[str]]:
-    """Find a terminal .so suffix with an optional numeric version."""
-    return re.search(r"\.so(?:\.[0-9]+)*$", libfilename)
-
-
 def demangle_libname(libfilename: str) -> str:
-    """Remove an auditwheel hash while preserving a shared library version."""
-    suffix = _shared_object_suffix(libfilename)
-    if suffix is None:
-        raise ValueError(f"Not a shared library filename: {libfilename}")
-    mangled_libname = libfilename[: suffix.start()]
-    demangled_libname = mangled_libname.rsplit("-", 1)[0]
-    return f"{demangled_libname}{suffix.group()}"
+    """Remove auditwheel's hash from the basename before the first dot."""
+    base, ext = libfilename.split(".", 1)
+    return f"{base.rsplit('-', 1)[0]}.{ext}"
