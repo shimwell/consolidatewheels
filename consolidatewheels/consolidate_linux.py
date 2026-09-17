@@ -88,7 +88,18 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
     libfoo.so.1.2.3 is not assumed to satisfy a dependency recorded as
     libfoo.so.1. Recovering the shorter soname would mean reading it
     from the library itself.
+
+    A library auditwheel mangled twice, libfoo-aaaaaaaa-bbbbbbbb.so,
+    demangles onto libfoo-aaaaaaaa.so, which is another embedded library
+    and the name its users already depend on, so it is left alone. An
+    unmangled namesake is a genuine duplicate and is still reported.
     """
+    embedded_names = {
+        libpath.name
+        for wheeldir in wheeldirs
+        for libpath in _find_shared_objects(wheeldir)
+        if libpath.parent.name.endswith(".libs")
+    }
     seen_shared_objects = {}  # type: dict[str, str]
     all_shared_objects = {}  # type: dict[str, str]
     for wheeldir in wheeldirs:
@@ -96,6 +107,11 @@ def buildlibmap(wheeldirs: list[str]) -> dict[str, str]:
             if not libpath.parent.name.endswith(".libs"):
                 continue
             demangled_lib = demangle_libname(libpath.name)
+            if (
+                demangled_lib in embedded_names
+                and demangle_libname(demangled_lib) != demangled_lib
+            ):
+                continue
             if demangled_lib in all_shared_objects:
                 seen_shared_object = seen_shared_objects[demangled_lib]
                 raise ValueError(
