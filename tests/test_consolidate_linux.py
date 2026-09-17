@@ -70,6 +70,24 @@ def test_buildlibmap_duplicate_version(tmp_path):
         consolidate_linux.buildlibmap([str(tmp_path)])
 
 
+def test_buildlibmap_double_mangled_library(tmp_path):
+    # auditwheel can graft a library that carries a hash already, so a wheel
+    # legitimately holds both names. Demangling the second one yields the
+    # first, which is a real file and the name consumers already depend on,
+    # so it must not become a mangling key.
+    libsdir = tmp_path / "package.libs"
+    libsdir.mkdir()
+    for name in (
+        "libgfortran-040039e1.so.5.0.0",
+        "libgfortran-040039e1-0352e75f.so.5.0.0",
+    ):
+        (libsdir / name).touch()
+
+    assert consolidate_linux.buildlibmap([str(tmp_path)]) == {
+        "libgfortran.so.5.0.0": "libgfortran-040039e1.so.5.0.0",
+    }
+
+
 @pytest.mark.parametrize(
     ("libfilename", "expected"),
     [
